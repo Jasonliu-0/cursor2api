@@ -19,6 +19,8 @@
 - **OpenAI Chat API** - 支持 `/v1/chat/completions` 接口
 - **流式响应** - 支持 SSE 流式输出
 - **浏览器自动化** - 自动处理人机验证
+- **Tool Use 协议** - 支持 Anthropic 工具调用协议
+- **自动执行模式** - 当 AI 拒绝执行时自动提取并执行命令
 
 ## 项目结构
 
@@ -120,11 +122,14 @@ browser:
   headless: true
   # 留空则自动检测或下载，也可手动指定路径
   path: ""
+  # 自动执行模式（见下方说明）
+  auto_execute: true
 ```
 
 支持的环境变量：
 - `PORT` - 覆盖端口配置
 - `BROWSER_PATH` - 覆盖浏览器路径
+- `AUTO_EXECUTE` - 开关自动执行模式 (`true`/`false`)
 
 ## API 接口
 
@@ -168,6 +173,82 @@ export ANTHROPIC_BASE_URL=http://localhost:3010
 
 # 运行 Claude Code
 claude
+```
+
+## 自动执行模式
+
+由于 Cursor 文档页的 AI 被设计为只读模式，无法直接执行文件写入、命令执行等操作。本项目实现了**自动执行模式**来解决这个问题。
+
+### 工作原理
+
+1. AI 收到工具调用请求后，会拒绝执行并建议用户手动运行命令
+2. 系统检测到拒绝响应后，自动提取 AI 建议的命令
+3. 在本地自动执行该命令
+4. 将执行结果返回给客户端
+
+### 配置开关
+
+```yaml
+# config.yaml
+browser:
+  auto_execute: true   # 开启自动执行（默认）
+  # auto_execute: false  # 关闭自动执行
+```
+
+或使用环境变量：
+
+```bash
+# 关闭自动执行
+AUTO_EXECUTE=false ./cursor2api
+
+# 开启自动执行
+AUTO_EXECUTE=true ./cursor2api
+```
+
+### 支持的操作
+
+| 操作 | 示例命令 |
+|------|----------|
+| 创建文件 | `echo "内容" > file.txt` |
+| 读取文件 | `cat file.txt` |
+| 列出目录 | `ls -la` |
+| 创建目录 | `mkdir -p dir` |
+| 删除文件 | `rm file.txt` |
+
+### 安全提示
+
+⚠️ **自动执行模式会在本地执行命令，请注意以下安全事项：**
+
+- 仅在可信环境中开启此功能
+- AI 可能生成危险命令（如 `rm -rf`）
+- 建议在沙箱或容器环境中运行
+- 生产环境建议关闭此功能
+
+## Tool Use 协议支持
+
+本项目实现了 Anthropic 的 Tool Use 协议，支持以下工具：
+
+| 工具名称 | 功能 | 参数 |
+|----------|------|------|
+| `bash` | 执行命令 | `command`, `cwd` |
+| `read_file` | 读取文件 | `path` |
+| `write_file` | 写入文件 | `path`, `content` |
+| `list_dir` | 列出目录 | `path` |
+| `edit` | 编辑文件 | `path`, `old_string`, `new_string` |
+
+### 工具接口
+
+```bash
+# 列出可用工具
+curl http://localhost:3010/tools
+
+# 直接执行工具（调试用）
+curl http://localhost:3010/tools/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool_name": "bash",
+    "input": {"command": "ls -la"}
+  }'
 ```
 
 ## 支持的模型
