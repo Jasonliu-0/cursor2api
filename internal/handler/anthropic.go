@@ -63,11 +63,13 @@ type Usage struct {
 var (
 	toolExecutor *tools.Executor
 	toolParser   *tools.Parser
+	intentParser *tools.IntentParser
 )
 
 func init() {
 	toolExecutor = tools.NewExecutor()
 	toolParser = tools.NewParser()
+	intentParser = tools.NewIntentParser()
 }
 
 // CursorSSEEvent Cursor SSE 事件格式
@@ -434,7 +436,7 @@ func handleNonStream(c *gin.Context, cursorReq browser.CursorChatRequest, model 
 	}
 
 	responseText := fullText.String()
-	contentBlocks := parseResponseToBlocks(responseText)
+	contentBlocks := parseResponseToBlocks(responseText, nil)
 
 	// 确定 stop_reason
 	stopReason := "end_turn"
@@ -457,11 +459,54 @@ func handleNonStream(c *gin.Context, cursorReq browser.CursorChatRequest, model 
 }
 
 // parseResponseToBlocks 解析 AI 响应为内容块（检测工具调用）
-func parseResponseToBlocks(text string) []ContentBlock {
+func parseResponseToBlocks(text string, userMessages []string) []ContentBlock {
 	var blocks []ContentBlock
 
 	// 检测工具调用
 	toolCalls, remainingText := toolParser.ParseToolCalls(text)
+
+	// 如果没有工具调用，检查是否是拒绝响应
+	if len(toolCalls) == 0 && tools.DetectRefusal(text) {
+		// 尝试从拒绝响应中提取命令并自动执行
+		if cmd := tools.ExtractCommandFromRefusal(text); cmd != "" {
+			// 自动执行提取的命令
+			output, err := toolExecutor.Execute("bash", map[string]interface{}{
+				"command": cmd,
+			})
+
+			resultText := output
+			isError := false
+			if err != nil {
+				resultText = err.Error()
+				isError = true
+			}
+
+			// 返回工具使用和结果
+			toolID := "toolu_" + generateID()
+			blocks = append(blocks, ContentBlock{
+				Type: "text",
+				Text: "正在执行命令...",
+			})
+			blocks = append(blocks, ContentBlock{
+				Type:  "tool_use",
+				ID:    toolID,
+				Name:  "bash",
+				Input: map[string]interface{}{"command": cmd},
+			})
+
+			// 添加执行结果说明
+			statusText := "✅ 命令执行成功"
+			if isError {
+				statusText = "❌ 命令执行失败"
+			}
+			blocks = append(blocks, ContentBlock{
+				Type: "text",
+				Text: fmt.Sprintf("\n\n%s:\n```\n%s\n```", statusText, resultText),
+			})
+
+			return blocks
+		}
+	}
 
 	// 添加文本块
 	if remainingText != "" {
